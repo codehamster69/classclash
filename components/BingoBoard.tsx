@@ -1,93 +1,186 @@
 "use client";
 
-import { calculateBingoLines, isValidBoard, makeMarkedGrid, toGrid } from "@/lib/gameLogic/bingo";
+import { calculateBingoLines, makeMarkedGrid, toGrid } from "@/lib/gameLogic/bingo";
+import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/presence";
 import { getPusherClient } from "@/lib/pusherClient";
-import { getOrCreatePlayerId } from "@/lib/store/session";
+import { getOrCreatePlayerId, getRoomHost } from "@/lib/store/session";
 import { Player } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
-import { ScoreBoard } from "./ScoreBoard";
+import { useRouter } from "next/navigation";
+
+const emptyBoard = Array.from({ length: 25 }, () => 0);
 
 export function BingoBoard({ roomId }: { roomId: string }) {
   const me = useMemo(() => getOrCreatePlayerId(), []);
+  const hostId = useMemo(() => getRoomHost(roomId), [roomId]);
+  const router = useRouter();
+
   const [players, setPlayers] = useState<Player[]>([]);
-  const [setup, setSetup] = useState(Array.from({ length: 25 }, (_, i) => i + 1));
+  const [setup, setSetup] = useState<number[]>(emptyBoard);
+  const [selectionOrder, setSelectionOrder] = useState<number[]>([]);
   const [ready, setReady] = useState<Record<string, boolean>>({});
-  const [called, setCalled] = useState<number[]>([]);
   const [boards, setBoards] = useState<Record<string, number[][]>>({});
-  const [scores, setScores] = useState<Record<string, number>>({});
-  const [turn, setTurn] = useState<string>("");
-  const [callInput, setCallInput] = useState("");
+  const [called, setCalled] = useState<number[]>([]);
+  const [turn, setTurn] = useState("");
+  const [winner, setWinner] = useState("");
 
   useEffect(() => {
     const pusher = getPusherClient();
     const channel = pusher.subscribe(`presence-classclash-room-${roomId}`);
 
-    channel.bind("pusher:subscription_succeeded", (members: { each: (cb: (m: { id: string; info?: { name?: string } }) => void) => void }) => {
-      const list: Player[] = [];
-      members.each((m) => list.push({ id: m.id, name: m.info?.name ?? "Player" }));
-      setPlayers(list.slice(0, 2));
-      if (!turn && list[0]) setTurn(list[0].id);
+    channel.bind("pusher:subscription_succeeded", (members: { each: (cb: (m: PresenceMember) => void) => void }) => {
+      const list: PresenceMember[] = [];
+      members.each((m) => list.push(m));
+      const sorted = sortPlayersByHost(membersToPlayers(list), hostId).slice(0, 2);
+      setPlayers(sorted);
+      if (sorted[0]) setTurn((current) => current || sorted[0].id);
+    });
+
+    channel.bind("pusher:member_added", (m: PresenceMember) => {
+      setPlayers((prev) => sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player" }], hostId).slice(0, 2));
+    });
+
+    channel.bind("pusher:member_removed", (m: PresenceMember) => {
+      setPlayers((prev) => prev.filter((p) => p.id !== m.id));
     });
 
     channel.bind("bingo-ready", (payload: { playerId: string; board: number[][] }) => {
       setReady((r) => ({ ...r, [payload.playerId]: true }));
       setBoards((b) => ({ ...b, [payload.playerId]: payload.board }));
-      setScores((s) => ({ ...s, [payload.playerId]: s[payload.playerId] ?? 0 }));
     });
 
-    channel.bind("bingo-call-number", (payload: { n: number; by: string }) => {
-      setCalled((c) => [...c, payload.n]);
-      if (players.length === 2) setTurn(players.find((p) => p.id !== payload.by)?.id ?? "");
+    channel.bind("bingo-call-number", (payload: { n: number; by: string; nextTurn: string }) => {
+      setCalled((prev) => (prev.includes(payload.n) ? prev : [...prev, payload.n]));
+      setTurn(payload.nextTurn);
     });
 
-    channel.bind("bingo-score-update", (payload: { scores: Record<string, number> }) => setScores(payload.scores));
+    channel.bind("bingo-win", (payload: { winner: string }) => {
+      setWinner(payload.winner);
+    });
 
     return () => pusher.unsubscribe(`presence-classclash-room-${roomId}`);
-  }, [roomId, players, turn]);
+  }, [hostId, roomId]);
 
-  const trigger = (event: string, data: unknown) => fetch("/api/pusher/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomId, event, data }) });
+  const trigger = (event: string, data: unknown) =>
+    fetch("/api/pusher/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomId, event, data }) });
 
-  const startReady = async () => {
-    if (!isValidBoard(setup)) return;
+  const onSetupBoxClick = (index: number) => {
+    if (ready[me]) return;
+    if (setup[index] !== 0) return;
+    const value = selectionOrder.length + 1;
+    setSetup((prev) => prev.map((cell, idx) => (idx === index ? value : cell)));
+    setSelectionOrder((prev) => [...prev, index]);
+  };
+
+  const undoSetup = () => {
+    if (!selectionOrder.length || ready[me]) return;
+    const last = selectionOrder[selectionOrder.length - 1];
+    setSetup((prev) => prev.map((cell, idx) => (idx === last ? 0 : cell)));
+    setSelectionOrder((prev) => prev.slice(0, -1));
+  };
+
+  const onReady = async () => {
+    if (selectionOrder.length !== 25 || ready[me]) return;
     await trigger("bingo-ready", { playerId: me, board: toGrid(setup) });
   };
 
   const bothReady = players.length === 2 && players.every((p) => ready[p.id]);
+  const myBoard = boards[me] ?? toGrid(setup);
 
-  const submitCall = async () => {
-    const n = Number(callInput);
-    if (!Number.isInteger(n) || n < 1 || n > 25 || called.includes(n) || turn !== me || !bothReady) return;
-    await trigger("bingo-call-number", { n, by: me });
-    const nextCalled = [...called, n];
-    const nextScores: Record<string, number> = {};
-    Object.entries(boards).forEach(([pid, board]) => {
-      nextScores[pid] = calculateBingoLines(makeMarkedGrid(board, nextCalled));
+  const scores = useMemo(() => {
+    const out: Record<string, number> = {};
+    players.forEach((p) => {
+      const board = boards[p.id];
+      out[p.id] = board ? calculateBingoLines(makeMarkedGrid(board, called)) : 0;
     });
-    await trigger("bingo-score-update", { scores: nextScores });
-    const winner = Object.entries(nextScores).find(([, score]) => score >= 5)?.[0];
-    if (winner) await trigger("bingo-win", { winner });
-    setCallInput("");
+    return out;
+  }, [boards, called, players]);
+
+  const onCall = async (value: number) => {
+    if (!bothReady || turn !== me || called.includes(value) || winner) return;
+    const other = players.find((p) => p.id !== me)?.id ?? me;
+    await trigger("bingo-call-number", { n: value, by: me, nextTurn: other });
+    const simulatedCalled = [...called, value];
+    const localWinner = players.find((p) => {
+      const board = boards[p.id];
+      return board && calculateBingoLines(makeMarkedGrid(board, simulatedCalled)) >= 5;
+    });
+    if (localWinner) {
+      await trigger("bingo-win", { winner: localWinner.id });
+    }
   };
 
+  const playerById = (id: string) => players.find((p) => p.id === id);
+
   return (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-4 pb-10">
       <h2 className="text-xl font-bold">Bingo</h2>
-      <ScoreBoard players={players} scores={scores} turn={turn} />
-      <div className="card space-y-3">
-        <p className="text-sm">Setup your board (1-25 unique values)</p>
-        <div className="grid grid-cols-5 gap-1">
-          {setup.map((v, i) => (
-            <input key={i} value={v} onChange={(e) => setSetup((prev) => prev.map((x, idx) => (idx === i ? Number(e.target.value || 0) : x)))} className="h-12 rounded border text-center dark:bg-slate-950" />
-          ))}
+
+      {!ready[me] && (
+        <div className="card space-y-3">
+          <p className="text-sm">Tap boxes in sequence to assign 1..25.</p>
+          <div className="grid grid-cols-5 gap-2">
+            {setup.map((v, i) => (
+              <button key={i} onClick={() => onSetupBoxClick(i)} className="aspect-square rounded-lg border font-semibold dark:bg-slate-950">
+                {v || ""}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button className="btn btn-secondary flex-1" onClick={undoSetup} disabled={!selectionOrder.length}>Undo</button>
+            <button className="btn btn-primary flex-1" onClick={onReady} disabled={selectionOrder.length !== 25}>Ready</button>
+          </div>
         </div>
-        <button className="btn btn-primary w-full" onClick={startReady}>Ready</button>
-      </div>
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-3 dark:bg-slate-900">
-        <div className="mx-auto flex max-w-3xl gap-2">
-          <input value={callInput} onChange={(e) => setCallInput(e.target.value)} placeholder="Call number" className="flex-1 rounded-xl border p-3 dark:bg-slate-950" />
-          <button className="btn btn-primary" onClick={submitCall}>Call</button>
-        </div>
-      </div>
+      )}
+
+      {ready[me] && !bothReady && <div className="card font-medium">Waiting for other player to be ready...</div>}
+
+      {bothReady && (
+        <>
+          <div className="card">
+            {!winner ? <p className="font-medium">Current turn: {playerById(turn)?.name ?? "-"}</p> : <p className="font-bold">Winner: {playerById(winner)?.name}</p>}
+            <p className="text-sm text-slate-500">Lines: {players.map((p) => `${p.name} ${scores[p.id] ?? 0}`).join(" • ")}</p>
+          </div>
+
+          <div className="card space-y-2">
+            <h3 className="font-semibold">Your board</h3>
+            <div className="grid grid-cols-5 gap-2">
+              {myBoard.flat().map((cell, i) => {
+                const marked = called.includes(cell);
+                return (
+                  <button
+                    key={i}
+                    onClick={() => onCall(cell)}
+                    disabled={!!winner || turn !== me || marked}
+                    className={`aspect-square rounded-lg border font-semibold ${marked ? "bg-slate-300 line-through dark:bg-slate-700" : "dark:bg-slate-950"}`}
+                  >
+                    {cell}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {winner && (
+            <div className="card space-y-3">
+              <h3 className="font-semibold">Final boards</h3>
+              <div className="grid gap-4 md:grid-cols-2">
+                {players.map((p) => (
+                  <div key={p.id}>
+                    <p className="mb-2 font-medium">{p.name}</p>
+                    <div className="grid grid-cols-5 gap-1">
+                      {(boards[p.id] ?? []).flat().map((n, i) => (
+                        <div key={i} className={`aspect-square rounded border text-center leading-10 ${called.includes(n) ? "bg-slate-300 line-through dark:bg-slate-700" : "dark:bg-slate-950"}`}>{n}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button className="btn btn-primary w-full" onClick={() => router.push(`/room/${roomId}`)}>New Game</button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

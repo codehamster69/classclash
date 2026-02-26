@@ -1,33 +1,33 @@
 "use client";
 
+import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/presence";
 import { getPusherClient } from "@/lib/pusherClient";
-import { getOrCreatePlayerId, getPlayerName } from "@/lib/store/session";
+import { getOrCreatePlayerId, getPlayerName, getRoomHost } from "@/lib/store/session";
 import { Player } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-
-type PresenceMember = { id: string; info?: { name?: string } };
 
 export function RoomLobby({ roomId }: { roomId: string }) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [selectedGame, setSelectedGame] = useState<"bingo" | "dots">("bingo");
   const router = useRouter();
   const me = useMemo(() => ({ id: getOrCreatePlayerId(), name: getPlayerName() || "Player" }), []);
+  const hostId = useMemo(() => getRoomHost(roomId), [roomId]);
 
   useEffect(() => {
     const pusher = getPusherClient();
     const channel = pusher.subscribe(`presence-classclash-room-${roomId}`);
 
     channel.bind("pusher:subscription_succeeded", (members: { each: (cb: (m: PresenceMember) => void) => void }) => {
-      const list: Player[] = [];
-      members.each((m) => list.push({ id: m.id, name: m.info?.name ?? "Player" }));
-      setPlayers(list.slice(0, 2));
+      const list: PresenceMember[] = [];
+      members.each((m) => list.push(m));
+      setPlayers(sortPlayersByHost(membersToPlayers(list), hostId).slice(0, 2));
     });
 
     channel.bind("pusher:member_added", (m: PresenceMember) => {
       setPlayers((prev) => {
         if (prev.some((p) => p.id === m.id)) return prev;
-        return [...prev, { id: m.id, name: m.info?.name ?? "Player" }].slice(0, 2);
+        return sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player" }], hostId).slice(0, 2);
       });
     });
 
@@ -42,10 +42,9 @@ export function RoomLobby({ roomId }: { roomId: string }) {
     return () => {
       pusher.unsubscribe(`presence-classclash-room-${roomId}`);
     };
-  }, [roomId, router]);
+  }, [hostId, roomId, router]);
 
-  const hostId = players[0]?.id;
-  const canStart = players.length === 2 && hostId === me.id;
+  const canStart = players.length === 2 && players[0]?.id === me.id;
 
   const triggerEvent = async (event: string, data: Record<string, unknown>) => {
     await fetch("/api/pusher/event", {
@@ -62,7 +61,7 @@ export function RoomLobby({ roomId }: { roomId: string }) {
           <h2 className="text-xl font-bold">Lobby</h2>
           <button className="btn btn-secondary !py-2" onClick={() => navigator.clipboard.writeText(roomId)}>Copy {roomId}</button>
         </div>
-        <p className="text-sm text-slate-500">2-player max. First player is host.</p>
+        <p className="text-sm text-slate-500">2-player max. Room creator stays host.</p>
         <ul className="space-y-1">
           {players.map((p, i) => <li key={p.id}>{p.name} {i === 0 ? "(Host)" : ""}</li>)}
         </ul>
