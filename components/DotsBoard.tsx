@@ -13,6 +13,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
   const router = useRouter();
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [rows, setRows] = useState(5);
   const [cols, setCols] = useState(5);
   const [configured, setConfigured] = useState(false);
@@ -36,6 +37,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       const payload = await response.json();
       const room = payload?.room;
       if (room?.dots) {
+        setParticipantIds((room.players ?? []).slice(0, 2));
         setRows(room.dots.rows ?? 5);
         setCols(room.dots.cols ?? 5);
         setConfigured(!!room.dots.configured);
@@ -51,6 +53,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
 
     channel.bind("pusher:member_added", (m: PresenceMember) => {
       setPlayers((prev) => sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player", isHost: !!m.info?.isHost }]).slice(0, 2));
+      setParticipantIds((prev) => (prev.includes(m.id) ? prev : [...prev, m.id].slice(0, 2)));
     });
 
     channel.bind("dots-config", (payload: { rows: number; cols: number; turn: string }) => {
@@ -120,8 +123,10 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       }
     });
 
-    const nextScores = players.reduce<Record<string, number>>((acc, p) => {
-      acc[p.id] = Object.values(nextBoxes).filter((owner) => owner === p.id).length;
+    const activePlayerIds = participantIds.length === 2 ? participantIds : players.slice(0, 2).map((p) => p.id);
+
+    const nextScores = activePlayerIds.reduce<Record<string, number>>((acc, playerId) => {
+      acc[playerId] = Object.values(nextBoxes).filter((owner) => owner === playerId).length;
       return acc;
     }, {});
 
@@ -129,8 +134,8 @@ export function DotsBoard({ roomId }: { roomId: string }) {
 
     const isFinished = Object.keys(nextBoxes).length === (rows - 1) * (cols - 1);
     if (isFinished) {
-      const first = players[0];
-      const second = players[1];
+      const first = players.find((p) => p.id === activePlayerIds[0]);
+      const second = players.find((p) => p.id === activePlayerIds[1]);
       const a = first ? nextScores[first.id] ?? 0 : 0;
       const b = second ? nextScores[second.id] ?? 0 : 0;
       const text = a === b ? "It's a draw!" : `${a > b ? first?.name : second?.name} wins!`;
@@ -138,7 +143,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       return;
     }
 
-    const nextTurn = gained ? me : players.find((p) => p.id !== me)?.id ?? me;
+    const nextTurn = gained ? me : activePlayerIds.find((id) => id !== me) ?? me;
     await trigger("dots-turn-change", { turn: nextTurn, by: me });
   };
 

@@ -15,6 +15,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
   const router = useRouter();
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [setup, setSetup] = useState<number[]>(emptyBoard);
   const [selectionOrder, setSelectionOrder] = useState<number[]>([]);
   const [ready, setReady] = useState<Record<string, boolean>>({});
@@ -36,6 +37,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
       const payload = await response.json();
       const room = payload?.room;
       if (room?.bingo) {
+        setParticipantIds((room.players ?? []).slice(0, 2));
         setReady(room.bingo.ready ?? {});
         setBoards(room.bingo.boards ?? {});
         setCalled(room.bingo.called ?? []);
@@ -48,6 +50,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
 
     channel.bind("pusher:member_added", (m: PresenceMember) => {
       setPlayers((prev) => sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player", isHost: !!m.info?.isHost }]).slice(0, 2));
+      setParticipantIds((prev) => (prev.includes(m.id) ? prev : [...prev, m.id].slice(0, 2)));
     });
 
     channel.bind("pusher:member_removed", (m: PresenceMember) => {
@@ -94,12 +97,14 @@ export function BingoBoard({ roomId }: { roomId: string }) {
     await trigger("bingo-ready", { playerId: me, board: toGrid(setup) });
   };
 
-  const bothReady = players.length === 2 && players.every((p) => ready[p.id]);
+  const readyIds = Object.keys(ready).filter((id) => ready[id]);
+  const matchPlayerIds = participantIds.length === 2 ? participantIds : readyIds.slice(0, 2);
+  const bothReady = matchPlayerIds.length === 2 && matchPlayerIds.every((id) => ready[id]);
   const myBoard = boards[me] ?? toGrid(setup);
 
   const onCall = async (value: number) => {
     if (!bothReady || turn !== me || called.includes(value) || winner) return;
-    const other = players.find((p) => p.id !== me)?.id ?? me;
+    const other = matchPlayerIds.find((id) => id !== me) ?? me;
     await trigger("bingo-call-number", { n: value, by: me, nextTurn: other });
     const simulatedCalled = [...called, value];
     const localWinner = players.find((p) => {
