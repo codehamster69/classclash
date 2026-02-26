@@ -3,7 +3,7 @@
 import { calculateBingoLines, makeMarkedGrid, toGrid } from "@/lib/gameLogic/bingo";
 import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/presence";
 import { getPusherClient } from "@/lib/pusherClient";
-import { getOrCreatePlayerId, getRoomHost } from "@/lib/store/session";
+import { getOrCreatePlayerId } from "@/lib/store/session";
 import { Player } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -12,7 +12,6 @@ const emptyBoard = Array.from({ length: 25 }, () => 0);
 
 export function BingoBoard({ roomId }: { roomId: string }) {
   const me = useMemo(() => getOrCreatePlayerId(), []);
-  const hostId = useMemo(() => getRoomHost(roomId), [roomId]);
   const router = useRouter();
 
   const [players, setPlayers] = useState<Player[]>([]);
@@ -28,16 +27,27 @@ export function BingoBoard({ roomId }: { roomId: string }) {
     const pusher = getPusherClient();
     const channel = pusher.subscribe(`presence-classclash-room-${roomId}`);
 
-    channel.bind("pusher:subscription_succeeded", (members: { each: (cb: (m: PresenceMember) => void) => void }) => {
+    channel.bind("pusher:subscription_succeeded", async (members: { each: (cb: (m: PresenceMember) => void) => void }) => {
       const list: PresenceMember[] = [];
       members.each((m) => list.push(m));
-      const sorted = sortPlayersByHost(membersToPlayers(list), hostId).slice(0, 2);
+      const sorted = sortPlayersByHost(membersToPlayers(list)).slice(0, 2);
       setPlayers(sorted);
-      if (sorted[0]) setTurn((current) => current || sorted[0].id);
+      const response = await fetch(`/api/room/state?roomId=${roomId}`);
+      const payload = await response.json();
+      const room = payload?.room;
+      if (room?.bingo) {
+        setReady(room.bingo.ready ?? {});
+        setBoards(room.bingo.boards ?? {});
+        setCalled(room.bingo.called ?? []);
+        setTurn(room.bingo.turn || sorted[0]?.id || "");
+        setWinner(room.bingo.winner ?? "");
+      } else if (sorted[0]) {
+        setTurn(sorted[0].id);
+      }
     });
 
     channel.bind("pusher:member_added", (m: PresenceMember) => {
-      setPlayers((prev) => sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player" }], hostId).slice(0, 2));
+      setPlayers((prev) => sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player", isHost: !!m.info?.isHost }]).slice(0, 2));
     });
 
     channel.bind("pusher:member_removed", (m: PresenceMember) => {
@@ -49,7 +59,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
       setBoards((b) => ({ ...b, [payload.playerId]: payload.board }));
     });
 
-    channel.bind("bingo-call-number", (payload: { n: number; by: string; nextTurn: string }) => {
+    channel.bind("bingo-call-number", (payload: { n: number; nextTurn: string }) => {
       setCalled((prev) => (prev.includes(payload.n) ? prev : [...prev, payload.n]));
       setTurn(payload.nextTurn);
     });
@@ -59,7 +69,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
     });
 
     return () => pusher.unsubscribe(`presence-classclash-room-${roomId}`);
-  }, [hostId, roomId]);
+  }, [roomId]);
 
   const trigger = (event: string, data: unknown) =>
     fetch("/api/pusher/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomId, event, data }) });
@@ -87,15 +97,6 @@ export function BingoBoard({ roomId }: { roomId: string }) {
   const bothReady = players.length === 2 && players.every((p) => ready[p.id]);
   const myBoard = boards[me] ?? toGrid(setup);
 
-  const scores = useMemo(() => {
-    const out: Record<string, number> = {};
-    players.forEach((p) => {
-      const board = boards[p.id];
-      out[p.id] = board ? calculateBingoLines(makeMarkedGrid(board, called)) : 0;
-    });
-    return out;
-  }, [boards, called, players]);
-
   const onCall = async (value: number) => {
     if (!bothReady || turn !== me || called.includes(value) || winner) return;
     const other = players.find((p) => p.id !== me)?.id ?? me;
@@ -105,9 +106,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
       const board = boards[p.id];
       return board && calculateBingoLines(makeMarkedGrid(board, simulatedCalled)) >= 5;
     });
-    if (localWinner) {
-      await trigger("bingo-win", { winner: localWinner.id });
-    }
+    if (localWinner) await trigger("bingo-win", { winner: localWinner.id });
   };
 
   const playerById = (id: string) => players.find((p) => p.id === id);
@@ -139,7 +138,6 @@ export function BingoBoard({ roomId }: { roomId: string }) {
         <>
           <div className="card">
             {!winner ? <p className="font-medium">Current turn: {playerById(turn)?.name ?? "-"}</p> : <p className="font-bold">Winner: {playerById(winner)?.name}</p>}
-            <p className="text-sm text-slate-500">Lines: {players.map((p) => `${p.name} ${scores[p.id] ?? 0}`).join(" • ")}</p>
           </div>
 
           <div className="card space-y-2">
