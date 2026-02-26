@@ -10,6 +10,7 @@ const ALLOWED_EVENTS = new Set([
   "bingo-call-number",
   "bingo-score-update",
   "bingo-win",
+  "dots-config",
   "dots-draw-line",
   "dots-box-completed",
   "dots-turn-change",

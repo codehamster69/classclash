@@ -12,3 +12,9 @@ export const getPlayerName = () => (typeof window === "undefined" ? "" : localSt
 export const setPlayerName = (name: string) => {
   localStorage.setItem("classclash-player-name", name);
 };
+
+export const setRoomHost = (roomId: string, playerId: string) => {
+  localStorage.setItem(`classclash-room-host-${roomId}`, playerId);
+};
+
+export const getRoomHost = (roomId: string) => localStorage.getItem(`classclash-room-host-${roomId}`) ?? "";
