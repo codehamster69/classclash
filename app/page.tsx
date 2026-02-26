@@ -1,7 +1,7 @@
 "use client";
 
 import { createRoomId } from "@/lib/room";
-import { getPlayerName, setPlayerName, getOrCreatePlayerId, setRoomHost } from "@/lib/store/session";
+import { getPlayerName, setPlayerName, getOrCreatePlayerId } from "@/lib/store/session";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -25,7 +25,6 @@ export default function HomePage() {
     if (!name.trim()) return;
     persistIdentity(name.trim());
     const roomId = createRoomId();
-    setRoomHost(roomId, getOrCreatePlayerId());
     router.push(`/room/${roomId}`);
   };
 

@@ -2,7 +2,7 @@
 
 import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/presence";
 import { getPusherClient } from "@/lib/pusherClient";
-import { getOrCreatePlayerId, getPlayerName, getRoomHost } from "@/lib/store/session";
+import { getOrCreatePlayerId, getPlayerName } from "@/lib/store/session";
 import { Player } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -10,9 +10,9 @@ import { useEffect, useMemo, useState } from "react";
 export function RoomLobby({ roomId }: { roomId: string }) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [selectedGame, setSelectedGame] = useState<"bingo" | "dots">("bingo");
+  const [roomError, setRoomError] = useState("");
   const router = useRouter();
   const me = useMemo(() => ({ id: getOrCreatePlayerId(), name: getPlayerName() || "Player" }), []);
-  const hostId = useMemo(() => getRoomHost(roomId), [roomId]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -21,13 +21,18 @@ export function RoomLobby({ roomId }: { roomId: string }) {
     channel.bind("pusher:subscription_succeeded", (members: { each: (cb: (m: PresenceMember) => void) => void }) => {
       const list: PresenceMember[] = [];
       members.each((m) => list.push(m));
-      setPlayers(sortPlayersByHost(membersToPlayers(list), hostId).slice(0, 2));
+      setPlayers(sortPlayersByHost(membersToPlayers(list)).slice(0, 2));
+      setRoomError("");
+    });
+
+    channel.bind("pusher:subscription_error", (status: number) => {
+      setRoomError(status === 403 ? "Room is full" : "Unable to join this room");
     });
 
     channel.bind("pusher:member_added", (m: PresenceMember) => {
       setPlayers((prev) => {
         if (prev.some((p) => p.id === m.id)) return prev;
-        return sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player" }], hostId).slice(0, 2);
+        return sortPlayersByHost([...prev, { id: m.id, name: m.info?.name ?? "Player", isHost: !!m.info?.isHost }]).slice(0, 2);
       });
     });
 
@@ -42,7 +47,7 @@ export function RoomLobby({ roomId }: { roomId: string }) {
     return () => {
       pusher.unsubscribe(`presence-classclash-room-${roomId}`);
     };
-  }, [hostId, roomId, router]);
+  }, [roomId, router]);
 
   const canStart = players.length === 2 && players[0]?.id === me.id;
 
@@ -56,6 +61,7 @@ export function RoomLobby({ roomId }: { roomId: string }) {
 
   return (
     <div className="space-y-4">
+      {roomError && <div className="card font-semibold text-rose-600">{roomError}</div>}
       <div className="card space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold">Lobby</h2>
