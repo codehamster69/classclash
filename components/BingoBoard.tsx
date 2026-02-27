@@ -71,11 +71,22 @@ export function BingoBoard({ roomId }: { roomId: string }) {
       setWinner(payload.winner);
     });
 
+    channel.bind("room-new-game", () => {
+      router.push(`/room/${roomId}`);
+    });
+
     return () => pusher.unsubscribe(`presence-classclash-room-${roomId}`);
-  }, [roomId]);
+  }, [roomId, router]);
 
   const trigger = (event: string, data: unknown) =>
     fetch("/api/pusher/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomId, event, data }) });
+
+  const onNewGame = async () => {
+    if (players[0]?.id === me) {
+      await trigger("room-new-game", { by: me });
+    }
+    router.push(`/room/${roomId}`);
+  };
 
   const onSetupBoxClick = (index: number) => {
     if (ready[me]) return;
@@ -179,7 +190,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
                   </div>
                 ))}
               </div>
-              <button className="btn btn-primary w-full" onClick={() => router.push(`/room/${roomId}`)}>New Game</button>
+              <button className="btn btn-primary w-full" onClick={onNewGame}>New Game</button>
             </div>
           )}
         </>
