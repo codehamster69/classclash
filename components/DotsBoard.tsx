@@ -7,10 +7,12 @@ import { getOrCreatePlayerId } from "@/lib/store/session";
 import { Player } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
 
 export function DotsBoard({ roomId }: { roomId: string }) {
   const me = useMemo(() => getOrCreatePlayerId(), []);
   const router = useRouter();
+  const { resolvedTheme } = useTheme();
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [participantIds, setParticipantIds] = useState<string[]>([]);
@@ -113,6 +115,37 @@ export function DotsBoard({ roomId }: { roomId: string }) {
   }, [rows, cols]);
 
   const lineSet = useMemo(() => new Set(lines.map((l) => l.key)), [lines]);
+  const lastLineKey = lines.at(-1)?.key;
+
+  const playerIds = useMemo(
+    () => (participantIds.length === 2 ? participantIds : players.slice(0, 2).map((p) => p.id)),
+    [participantIds, players],
+  );
+
+  const isDark = resolvedTheme === "dark";
+  const neutralLineColor = isDark ? "#334155" : "#cbd5e1";
+  const lastMoveLineColor = isDark ? "#facc15" : "#d97706";
+  const playerPalette = [
+    {
+      line: isDark ? "#38bdf8" : "#0284c7",
+      boxFill: isDark ? "#082f49" : "#e0f2fe",
+      boxText: isDark ? "#7dd3fc" : "#0c4a6e",
+    },
+    {
+      line: isDark ? "#f472b6" : "#be185d",
+      boxFill: isDark ? "#4a044e" : "#fce7f3",
+      boxText: isDark ? "#f9a8d4" : "#831843",
+    },
+  ];
+
+  const playerStyles = useMemo(
+    () =>
+      playerIds.reduce<Record<string, (typeof playerPalette)[number]>>((acc, playerId, index) => {
+        acc[playerId] = playerPalette[index] ?? playerPalette[0];
+        return acc;
+      }, {}),
+    [playerIds, playerPalette],
+  );
 
   const startConfiguredGame = async () => {
     if (players[0]?.id !== me) return;
@@ -134,7 +167,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       }
     });
 
-    const activePlayerIds = participantIds.length === 2 ? participantIds : players.slice(0, 2).map((p) => p.id);
+    const activePlayerIds = playerIds;
 
     const nextScores = activePlayerIds.reduce<Record<string, number>>((acc, playerId) => {
       acc[playerId] = Object.values(nextBoxes).filter((owner) => owner === playerId).length;
@@ -190,10 +223,27 @@ export function DotsBoard({ roomId }: { roomId: string }) {
                 Array.from({ length: cols - 1 }).map((__, x) => {
                   const owner = boxes[`${x},${y}`];
                   if (!owner) return null;
+                  const style = playerStyles[owner] ?? playerPalette[0];
                   return (
-                    <text key={`${x},${y}`} x={pad + x * cellSize + cellSize / 2} y={pad + y * cellSize + cellSize / 2 + 5} textAnchor="middle" className="fill-indigo-600 text-lg font-bold">
-                      {initialFor(owner)}
-                    </text>
+                    <g key={`${x},${y}`}>
+                      <rect
+                        x={pad + x * cellSize + 8}
+                        y={pad + y * cellSize + 8}
+                        width={cellSize - 16}
+                        height={cellSize - 16}
+                        rx={8}
+                        fill={style.boxFill}
+                      />
+                      <text
+                        x={pad + x * cellSize + cellSize / 2}
+                        y={pad + y * cellSize + cellSize / 2 + 5}
+                        textAnchor="middle"
+                        fill={style.boxText}
+                        className="text-lg font-bold"
+                      >
+                        {initialFor(owner)}
+                      </text>
+                    </g>
                   );
                 }),
               )}
@@ -205,6 +255,11 @@ export function DotsBoard({ roomId }: { roomId: string }) {
                 const p1y = pad + points.from.y * cellSize;
                 const p2x = pad + points.to.x * cellSize;
                 const p2y = pad + points.to.y * cellSize;
+                const lineColor = !claimed
+                  ? neutralLineColor
+                  : key === lastLineKey
+                    ? lastMoveLineColor
+                    : playerStyles[claimed.by]?.line ?? playerPalette[0].line;
                 return (
                   <line
                     key={key}
@@ -212,10 +267,10 @@ export function DotsBoard({ roomId }: { roomId: string }) {
                     y1={p1y}
                     x2={p2x}
                     y2={p2y}
-                    stroke={claimed ? "#4f46e5" : "#cbd5e1"}
+                    stroke={lineColor}
                     strokeWidth={claimed ? 8 : 10}
                     strokeLinecap="round"
-                    className={claimed ? "" : "cursor-pointer hover:stroke-slate-400"}
+                    className={claimed ? "" : "cursor-pointer hover:stroke-slate-400 dark:hover:stroke-slate-500"}
                     onClick={() => onLineClick(key)}
                   />
                 );
