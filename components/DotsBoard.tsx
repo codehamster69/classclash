@@ -84,11 +84,22 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       setWinnerText(payload.winnerText);
     });
 
+    channel.bind("room-new-game", () => {
+      router.push(`/room/${roomId}`);
+    });
+
     return () => pusher.unsubscribe(`presence-classclash-room-${roomId}`);
-  }, [roomId]);
+  }, [roomId, router]);
 
   const trigger = (event: string, data: unknown) =>
     fetch("/api/pusher/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomId, event, data }) });
+
+  const onNewGame = async () => {
+    if (players[0]?.id === me) {
+      await trigger("room-new-game", { by: me });
+    }
+    router.push(`/room/${roomId}`);
+  };
 
   const allSegments = useMemo(() => {
     const output: string[] = [];
@@ -225,7 +236,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
         {winnerText && <p className="mt-2 font-bold">{winnerText}</p>}
       </div>
 
-      {winnerText && <button className="btn btn-primary w-full" onClick={() => router.push(`/room/${roomId}`)}>New Game</button>}
+      {winnerText && <button className="btn btn-primary w-full" onClick={onNewGame}>New Game</button>}
     </div>
   );
 }
