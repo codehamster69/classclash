@@ -25,6 +25,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
   const [turn, setTurn] = useState("");
   const [winnerText, setWinnerText] = useState("");
   const localSnapshotRef = useRef(false);
+  const hasHydratedSnapshot = useRef(false);
   const storageKey = `classclash:dots:${roomId}`;
 
   const hydrateFromState = (state: {
@@ -51,17 +52,20 @@ export function DotsBoard({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     const cached = localStorage.getItem(storageKey);
-    if (!cached) return;
-    try {
-      const parsed = JSON.parse(cached);
-      hydrateFromState(parsed);
-      localSnapshotRef.current = true;
-    } catch {
-      localStorage.removeItem(storageKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        hydrateFromState(parsed);
+        localSnapshotRef.current = true;
+      } catch {
+        localStorage.removeItem(storageKey);
+      }
     }
+    hasHydratedSnapshot.current = true;
   }, [storageKey]);
 
   useEffect(() => {
+    if (!hasHydratedSnapshot.current) return;
     const snapshot = {
       rows,
       cols,
