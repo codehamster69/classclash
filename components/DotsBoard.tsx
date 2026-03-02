@@ -5,7 +5,7 @@ import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/prese
 import { getPusherClient } from "@/lib/pusherClient";
 import { getOrCreatePlayerId } from "@/lib/store/session";
 import { Player } from "@/lib/types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 
@@ -24,6 +24,57 @@ export function DotsBoard({ roomId }: { roomId: string }) {
   const [scores, setScores] = useState<Record<string, number>>({});
   const [turn, setTurn] = useState("");
   const [winnerText, setWinnerText] = useState("");
+  const localSnapshotRef = useRef(false);
+  const storageKey = `classclash:dots:${roomId}`;
+
+  const hydrateFromState = (state: {
+    rows?: number;
+    cols?: number;
+    configured?: boolean;
+    lines?: { key: string; by: string }[];
+    boxes?: Record<string, string>;
+    scores?: Record<string, number>;
+    turn?: string;
+    winnerText?: string;
+    participantIds?: string[];
+  }) => {
+    setRows(state.rows ?? 5);
+    setCols(state.cols ?? 5);
+    setConfigured(!!state.configured);
+    setLines(state.lines ?? []);
+    setBoxes(state.boxes ?? {});
+    setScores(state.scores ?? {});
+    setTurn(state.turn ?? "");
+    setWinnerText(state.winnerText ?? "");
+    if (state.participantIds?.length) setParticipantIds(state.participantIds.slice(0, 2));
+  };
+
+  useEffect(() => {
+    const cached = localStorage.getItem(storageKey);
+    if (!cached) return;
+    try {
+      const parsed = JSON.parse(cached);
+      hydrateFromState(parsed);
+      localSnapshotRef.current = true;
+    } catch {
+      localStorage.removeItem(storageKey);
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    const snapshot = {
+      rows,
+      cols,
+      configured,
+      lines,
+      boxes,
+      scores,
+      turn,
+      winnerText,
+      participantIds,
+    };
+    localStorage.setItem(storageKey, JSON.stringify(snapshot));
+  }, [boxes, cols, configured, lines, participantIds, rows, scores, storageKey, turn, winnerText]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -39,15 +90,29 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       const payload = await response.json();
       const room = payload?.room;
       if (room?.dots) {
-        setParticipantIds((room.players ?? []).slice(0, 2));
-        setRows(room.dots.rows ?? 5);
-        setCols(room.dots.cols ?? 5);
-        setConfigured(!!room.dots.configured);
-        setLines(room.dots.lines ?? []);
-        setBoxes(room.dots.boxes ?? {});
-        setScores(room.dots.scores ?? {});
-        setTurn(room.dots.turn || sorted[0]?.id || "");
-        setWinnerText(room.dots.winnerText ?? "");
+        const hasServerProgress =
+          !!room.dots.configured ||
+          (room.dots.lines?.length ?? 0) > 0 ||
+          Object.keys(room.dots.boxes ?? {}).length > 0 ||
+          !!room.dots.winnerText;
+
+        if (hasServerProgress || !localSnapshotRef.current) {
+          hydrateFromState({
+            participantIds: (room.players ?? []).slice(0, 2),
+            rows: room.dots.rows ?? 5,
+            cols: room.dots.cols ?? 5,
+            configured: !!room.dots.configured,
+            lines: room.dots.lines ?? [],
+            boxes: room.dots.boxes ?? {},
+            scores: room.dots.scores ?? {},
+            turn: room.dots.turn || sorted[0]?.id || "",
+            winnerText: room.dots.winnerText ?? "",
+          });
+          localSnapshotRef.current = true;
+        } else {
+          setParticipantIds((room.players ?? []).slice(0, 2));
+          setTurn((current) => current || sorted[0]?.id || "");
+        }
       } else if (sorted[0]) {
         setTurn(sorted[0].id);
       }
@@ -200,7 +265,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
 
   return (
     <div className="space-y-4 pb-10">
-      <h2 className="text-xl font-bold">Dots & Boxes</h2>
+      <h2 className="text-xl font-extrabold tracking-tight">Dots & Boxes 🧩</h2>
 
       <div className="card space-y-3">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -212,7 +277,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
           </label>
         </div>
         {!configured && <button className="btn btn-primary w-full" disabled={players[0]?.id !== me || players.length < 2} onClick={startConfiguredGame}>Start Grid</button>}
-        {configured && <p className="text-sm">Turn: {players.find((p) => p.id === turn)?.name}</p>}
+        {configured && <p className="text-sm font-medium">Turn: {players.find((p) => p.id === turn)?.name}</p>}
       </div>
 
       {configured && (
@@ -286,7 +351,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
         </div>
       )}
 
-      <div className="card text-sm">
+      <div className="card text-sm font-medium">
         <p>{players.map((p) => `${p.name}: ${scores[p.id] ?? 0}`).join(" • ")}</p>
         {winnerText && <p className="mt-2 font-bold">{winnerText}</p>}
       </div>
