@@ -9,6 +9,7 @@ type BingoState = {
 };
 
 type DotsState = {
+  updatedAt: number;
   rows: number;
   cols: number;
   configured: boolean;
@@ -36,6 +37,7 @@ const defaultBingoState = (): BingoState => ({
 });
 
 const defaultDotsState = (): DotsState => ({
+  updatedAt: Date.now(),
   rows: 5,
   cols: 5,
   configured: false,

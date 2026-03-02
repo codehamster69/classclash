@@ -24,6 +24,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
   const [scores, setScores] = useState<Record<string, number>>({});
   const [turn, setTurn] = useState("");
   const [winnerText, setWinnerText] = useState("");
+  const [updatedAt, setUpdatedAt] = useState(0);
   const localSnapshotRef = useRef(false);
   const hasHydratedSnapshot = useRef(false);
   const storageKey = `classclash:dots:${roomId}`;
@@ -38,6 +39,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
     turn?: string;
     winnerText?: string;
     participantIds?: string[];
+    updatedAt?: number;
   }) => {
     setRows(state.rows ?? 5);
     setCols(state.cols ?? 5);
@@ -47,15 +49,29 @@ export function DotsBoard({ roomId }: { roomId: string }) {
     setScores(state.scores ?? {});
     setTurn(state.turn ?? "");
     setWinnerText(state.winnerText ?? "");
+    setUpdatedAt(state.updatedAt ?? Date.now());
     if (state.participantIds?.length) setParticipantIds(state.participantIds.slice(0, 2));
   };
+
+  const getCurrentSnapshot = (nextUpdatedAt = Date.now()) => ({
+    rows,
+    cols,
+    configured,
+    lines,
+    boxes,
+    scores,
+    turn,
+    winnerText,
+    participantIds,
+    updatedAt: nextUpdatedAt,
+  });
 
   useEffect(() => {
     const cached = localStorage.getItem(storageKey);
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
-        hydrateFromState(parsed);
+        hydrateFromState({ ...parsed, updatedAt: Number(parsed?.updatedAt ?? 0) });
         localSnapshotRef.current = true;
       } catch {
         localStorage.removeItem(storageKey);
@@ -66,19 +82,9 @@ export function DotsBoard({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     if (!hasHydratedSnapshot.current) return;
-    const snapshot = {
-      rows,
-      cols,
-      configured,
-      lines,
-      boxes,
-      scores,
-      turn,
-      winnerText,
-      participantIds,
-    };
+    const snapshot = getCurrentSnapshot(updatedAt || Date.now());
     localStorage.setItem(storageKey, JSON.stringify(snapshot));
-  }, [boxes, cols, configured, lines, participantIds, rows, scores, storageKey, turn, winnerText]);
+  }, [boxes, cols, configured, lines, participantIds, rows, scores, storageKey, turn, updatedAt, winnerText]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -90,18 +96,22 @@ export function DotsBoard({ roomId }: { roomId: string }) {
       const sorted = sortPlayersByHost(membersToPlayers(list)).slice(0, 2);
       setPlayers(sorted);
 
+      const localSnapshot = (() => {
+        const cached = localStorage.getItem(storageKey);
+        if (!cached) return null;
+        try {
+          const parsed = JSON.parse(cached);
+          return { ...parsed, updatedAt: Number(parsed?.updatedAt ?? 0) };
+        } catch {
+          return null;
+        }
+      })();
+
       const response = await fetch(`/api/room/state?roomId=${roomId}`);
       const payload = await response.json();
       const room = payload?.room;
-      if (room?.dots) {
-        const hasServerProgress =
-          !!room.dots.configured ||
-          (room.dots.lines?.length ?? 0) > 0 ||
-          Object.keys(room.dots.boxes ?? {}).length > 0 ||
-          !!room.dots.winnerText;
-
-        if (hasServerProgress || !localSnapshotRef.current) {
-          hydrateFromState({
+      const serverState = room?.dots
+        ? {
             participantIds: (room.players ?? []).slice(0, 2),
             rows: room.dots.rows ?? 5,
             cols: room.dots.cols ?? 5,
@@ -111,12 +121,26 @@ export function DotsBoard({ roomId }: { roomId: string }) {
             scores: room.dots.scores ?? {},
             turn: room.dots.turn || sorted[0]?.id || "",
             winnerText: room.dots.winnerText ?? "",
-          });
-          localSnapshotRef.current = true;
-        } else {
-          setParticipantIds((room.players ?? []).slice(0, 2));
-          setTurn((current) => current || sorted[0]?.id || "");
-        }
+            updatedAt: Number(room.dots.updatedAt ?? 0),
+          }
+        : null;
+
+      const serverUpdatedAt = Number(serverState?.updatedAt ?? 0);
+      const localUpdatedAt = Number(localSnapshot?.updatedAt ?? 0);
+
+      if (localSnapshot && localUpdatedAt > serverUpdatedAt) {
+        hydrateFromState(localSnapshot);
+        localSnapshotRef.current = true;
+        await trigger("dots-sync-state", { ...localSnapshot, by: me });
+        return;
+      }
+
+      if (serverState) {
+        hydrateFromState(serverState);
+        localSnapshotRef.current = true;
+      } else if (localSnapshot) {
+        hydrateFromState(localSnapshot);
+        localSnapshotRef.current = true;
       } else if (sorted[0]) {
         setTurn(sorted[0].id);
       }
@@ -128,6 +152,7 @@ export function DotsBoard({ roomId }: { roomId: string }) {
     });
 
     channel.bind("dots-config", (payload: { rows: number; cols: number; turn: string }) => {
+      setUpdatedAt(Date.now());
       setRows(payload.rows);
       setCols(payload.cols);
       setTurn(payload.turn);
@@ -139,20 +164,40 @@ export function DotsBoard({ roomId }: { roomId: string }) {
     });
 
     channel.bind("dots-draw-line", (payload: { key: string; by: string }) => {
+      setUpdatedAt(Date.now());
       setLines((prev) => (prev.some((l) => l.key === payload.key) ? prev : [...prev, payload]));
     });
 
     channel.bind("dots-box-completed", (payload: { boxes: Record<string, string>; scores: Record<string, number> }) => {
+      setUpdatedAt(Date.now());
       setBoxes(payload.boxes);
       setScores(payload.scores);
     });
 
     channel.bind("dots-turn-change", (payload: { turn: string }) => {
+      setUpdatedAt(Date.now());
       setTurn(payload.turn);
     });
 
     channel.bind("dots-game-end", (payload: { winnerText: string }) => {
+      setUpdatedAt(Date.now());
       setWinnerText(payload.winnerText);
+    });
+
+    channel.bind("dots-sync-state", (payload: {
+      rows: number;
+      cols: number;
+      configured: boolean;
+      lines: { key: string; by: string }[];
+      boxes: Record<string, string>;
+      scores: Record<string, number>;
+      turn: string;
+      winnerText: string;
+      participantIds?: string[];
+      updatedAt?: number;
+    }) => {
+      hydrateFromState(payload);
+      localSnapshotRef.current = true;
     });
 
     channel.bind("room-new-game", () => {
