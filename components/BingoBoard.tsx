@@ -5,7 +5,7 @@ import { membersToPlayers, PresenceMember, sortPlayersByHost } from "@/lib/prese
 import { getPusherClient } from "@/lib/pusherClient";
 import { getOrCreatePlayerId } from "@/lib/store/session";
 import { Player } from "@/lib/types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const emptyBoard = Array.from({ length: 25 }, () => 0);
@@ -23,6 +23,25 @@ export function BingoBoard({ roomId }: { roomId: string }) {
   const [called, setCalled] = useState<number[]>([]);
   const [turn, setTurn] = useState("");
   const [winner, setWinner] = useState("");
+  const localSetupLoadedRef = useRef(false);
+  const setupStorageKey = `classclash:bingo-setup:${roomId}:${me}`;
+
+  useEffect(() => {
+    const cached = localStorage.getItem(setupStorageKey);
+    if (!cached) return;
+    try {
+      const parsed = JSON.parse(cached) as { setup?: number[]; selectionOrder?: number[] };
+      if (Array.isArray(parsed.setup) && parsed.setup.length === 25) setSetup(parsed.setup);
+      if (Array.isArray(parsed.selectionOrder)) setSelectionOrder(parsed.selectionOrder);
+      localSetupLoadedRef.current = true;
+    } catch {
+      localStorage.removeItem(setupStorageKey);
+    }
+  }, [setupStorageKey]);
+
+  useEffect(() => {
+    localStorage.setItem(setupStorageKey, JSON.stringify({ setup, selectionOrder }));
+  }, [selectionOrder, setup, setupStorageKey]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -43,6 +62,14 @@ export function BingoBoard({ roomId }: { roomId: string }) {
         setCalled(room.bingo.called ?? []);
         setTurn(room.bingo.turn || sorted[0]?.id || "");
         setWinner(room.bingo.winner ?? "");
+        if (room.bingo.ready?.[me]) {
+          localStorage.removeItem(setupStorageKey);
+        } else if (!localSetupLoadedRef.current && room.bingo.boards?.[me]) {
+          const flat = room.bingo.boards[me].flat();
+          setSetup(flat);
+          setSelectionOrder(flat.map((_: number, idx: number) => idx));
+          localSetupLoadedRef.current = true;
+        }
       } else if (sorted[0]) {
         setTurn(sorted[0].id);
       }
@@ -106,6 +133,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
   const onReady = async () => {
     if (selectionOrder.length !== 25 || ready[me]) return;
     await trigger("bingo-ready", { playerId: me, board: toGrid(setup) });
+    localStorage.removeItem(setupStorageKey);
   };
 
   const readyIds = Object.keys(ready).filter((id) => ready[id]);
@@ -129,14 +157,14 @@ export function BingoBoard({ roomId }: { roomId: string }) {
 
   return (
     <div className="space-y-4 pb-10">
-      <h2 className="text-xl font-bold">Bingo</h2>
+      <h2 className="text-xl font-extrabold tracking-tight">Bingo 🎯</h2>
 
       {!ready[me] && (
         <div className="card space-y-3">
-          <p className="text-sm">Tap boxes in sequence to assign 1..25.</p>
+          <p className="text-sm">Tap boxes in sequence to assign 1..25 and lock your lucky board ✨</p>
           <div className="grid grid-cols-5 gap-2">
             {setup.map((v, i) => (
-              <button key={i} onClick={() => onSetupBoxClick(i)} className="aspect-square rounded-lg border font-semibold dark:bg-slate-950">
+              <button key={i} onClick={() => onSetupBoxClick(i)} className="aspect-square rounded-lg border border-white/70 bg-white/70 font-semibold shadow-sm transition hover:-translate-y-0.5 dark:border-slate-700 dark:bg-slate-950/80">
                 {v || ""}
               </button>
             ))}
@@ -166,7 +194,7 @@ export function BingoBoard({ roomId }: { roomId: string }) {
                     key={i}
                     onClick={() => onCall(cell)}
                     disabled={!!winner || turn !== me || marked}
-                    className={`aspect-square rounded-lg border font-semibold ${marked ? "bg-slate-300 line-through dark:bg-slate-700" : "dark:bg-slate-950"}`}
+                    className={`aspect-square rounded-lg border font-semibold shadow-sm transition ${marked ? "bg-fuchsia-100 line-through dark:bg-fuchsia-900/40" : "bg-white/70 hover:-translate-y-0.5 dark:bg-slate-950/80"}`}
                   >
                     {cell}
                   </button>

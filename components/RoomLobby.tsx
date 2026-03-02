@@ -64,17 +64,17 @@ export function RoomLobby({ roomId }: { roomId: string }) {
       {roomError && <div className="card font-semibold text-rose-600">{roomError}</div>}
       <div className="card space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold">Lobby</h2>
+          <h2 className="text-xl font-extrabold tracking-tight">Lobby 🎮</h2>
           <button className="btn btn-secondary !py-2" onClick={() => navigator.clipboard.writeText(roomId)}>Copy {roomId}</button>
         </div>
-        <p className="text-sm text-slate-500">2-player max. Room creator stays host.</p>
+        <p className="text-sm text-slate-600 dark:text-slate-300">2-player max. Room creator stays host.</p>
         <ul className="space-y-1">
-          {players.map((p, i) => <li key={p.id}>{p.name} {i === 0 ? "(Host)" : ""}</li>)}
+          {players.map((p, i) => <li key={p.id} className="rounded-lg bg-white/60 px-2 py-1 dark:bg-slate-800/70">{p.name} {i === 0 ? "(Host)" : ""}</li>)}
         </ul>
       </div>
 
       <div className="card space-y-2">
-        <h3 className="font-semibold">Game Selection</h3>
+        <h3 className="font-semibold">Choose your game</h3>
         <div className="grid grid-cols-2 gap-2">
           <button className={`btn ${selectedGame === "bingo" ? "btn-primary" : "btn-secondary"}`} onClick={() => setSelectedGame("bingo")}>Bingo</button>
           <button className={`btn ${selectedGame === "dots" ? "btn-primary" : "btn-secondary"}`} onClick={() => setSelectedGame("dots")}>Dots & Boxes</button>
