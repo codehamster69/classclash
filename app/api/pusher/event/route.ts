@@ -16,6 +16,8 @@ const ALLOWED_EVENTS = new Set([
   "dots-box-completed",
   "dots-turn-change",
   "dots-game-end",
+  "dots-sync-state",
+  "room-new-game",
 ]);
 
 export async function POST(req: Request) {
@@ -53,6 +55,7 @@ export async function POST(req: Request) {
 
   if (event === "dots-config") {
     room.dots = {
+      updatedAt: Date.now(),
       rows: data.rows,
       cols: data.cols,
       configured: true,
@@ -65,13 +68,34 @@ export async function POST(req: Request) {
   }
   if (event === "dots-draw-line") {
     if (!room.dots.lines.some((line) => line.key === data.key)) room.dots.lines.push({ key: data.key, by: data.by });
+    room.dots.updatedAt = Date.now();
   }
   if (event === "dots-box-completed") {
     room.dots.boxes = data.boxes;
     room.dots.scores = data.scores;
+    room.dots.updatedAt = Date.now();
   }
-  if (event === "dots-turn-change") room.dots.turn = data.turn;
-  if (event === "dots-game-end") room.dots.winnerText = data.winnerText;
+  if (event === "dots-turn-change") {
+    room.dots.turn = data.turn;
+    room.dots.updatedAt = Date.now();
+  }
+  if (event === "dots-game-end") {
+    room.dots.winnerText = data.winnerText;
+    room.dots.updatedAt = Date.now();
+  }
+  if (event === "dots-sync-state") {
+    room.dots = {
+      updatedAt: Date.now(),
+      rows: data.rows ?? room.dots.rows,
+      cols: data.cols ?? room.dots.cols,
+      configured: !!data.configured,
+      lines: data.lines ?? [],
+      boxes: data.boxes ?? {},
+      scores: data.scores ?? {},
+      turn: data.turn ?? "",
+      winnerText: data.winnerText ?? "",
+    };
+  }
 
   await pusherServer.trigger(`presence-classclash-room-${roomId}`, event, data);
   return NextResponse.json({ ok: true });
