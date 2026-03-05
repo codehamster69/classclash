@@ -23,6 +23,14 @@ export function RoomLobby({ roomId }: { roomId: string }) {
       members.each((m) => list.push(m));
       setPlayers(sortPlayersByHost(membersToPlayers(list)).slice(0, 2));
       setRoomError("");
+      void (async () => {
+        const response = await fetch(`/api/room/state?roomId=${roomId}`);
+        const payload = await response.json();
+        const currentGame = payload?.room?.currentGame;
+        if (currentGame === "bingo" || currentGame === "dots") {
+          router.push(`/room/${roomId}/${currentGame}`);
+        }
+      })();
     });
 
     channel.bind("pusher:subscription_error", (status: number) => {
